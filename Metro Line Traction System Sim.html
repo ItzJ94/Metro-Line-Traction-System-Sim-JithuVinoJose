@@ -1,0 +1,687 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Metro Line 1 Traction SCADA</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: OCC console. Status bar → line mimic (live current flow) → substation detail | section operations → load-flow analysis → alarms | SOE → sectioning devices + design basis */
+:root{
+  --bg:#e7eaec; --panel:#f6f7f8; --surface:#ffffff; --ink:#1f2529; --muted:#5b656c; --rule:#cbd2d7;
+  --rail:#1f2529; --dead:#b3bbc1; --flow:#d98200; --regen:#0c8a80; --ret:#7d8890; --earth:#6a4fb3; --sel:#2d6fb7;
+  --p1:#cf2a2a; --p2:#d47000; --p3:#9a8400; --ok:#2e7a39;
+  --display:"Saira Condensed","Arial Narrow",sans-serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#11161a; --panel:#192026; --surface:#1f272e; --ink:#e2e7eb; --muted:#93a0a9; --rule:#2e3840;
+  --rail:#dfe5ea; --dead:#46515a; --flow:#ffb23a; --regen:#3cc9bd; --ret:#6f7c86; --earth:#a68fff; --sel:#6aa9f0;
+  --p1:#ff5d55; --p2:#ff9c33; --p3:#e5d44c; --ok:#6cc17a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161a; --panel:#192026; --surface:#1f272e; --ink:#e2e7eb; --muted:#93a0a9; --rule:#2e3840;
+  --rail:#dfe5ea; --dead:#46515a; --flow:#ffb23a; --regen:#3cc9bd; --ret:#6f7c86; --earth:#a68fff; --sel:#6aa9f0;
+  --p1:#ff5d55; --p2:#ff9c33; --p3:#e5d44c; --ok:#6cc17a; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);padding-block:14px 40px;padding-inline:16px}
+.wrap{max-width:1380px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h1{font:600 1.85rem/1.05 var(--display);margin:0;letter-spacing:.01em;text-wrap:balance}
+h2{font:600 1rem var(--display);text-transform:uppercase;letter-spacing:.1em;margin:0 0 10px;color:var(--muted)}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:14px;min-width:0}
+.bar{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;justify-content:space-between}
+.sub{color:var(--muted);font-size:13px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.clock{font:500 1.45rem var(--mono);font-variant-numeric:tabular-nums}
+.kpis{display:flex;gap:20px;flex-wrap:wrap}
+.kpis div{font:500 1.05rem var(--mono);font-variant-numeric:tabular-nums}
+.kpis small{display:block;font:12px var(--body);color:var(--muted)}
+.chip{font:500 12px var(--mono);padding:4px 10px;border-radius:4px;border:1.5px solid var(--rule);color:var(--muted)}
+.chip.on.c1{border-color:var(--p1);color:var(--p1)} .chip.on.c2{border-color:var(--p2);color:var(--p2)} .chip.on.c3{border-color:var(--p3);color:var(--p3)}
+.blink{animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.blink{animation:none}}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:5px;overflow:hidden}
+.seg button{border:0;border-radius:0;border-right:1px solid var(--rule)} .seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}
+button{font:500 13px var(--body);padding:6px 11px;border-radius:5px;border:1px solid var(--rule);background:var(--surface);color:var(--ink);cursor:pointer}
+button:hover{border-color:var(--muted)}
+button.warn{border-color:var(--p1);color:var(--p1)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+select{font:13px var(--body);padding:5px 6px;border-radius:5px;border:1px solid var(--rule);background:var(--surface);color:var(--ink)}
+label{font-size:13px;color:var(--muted)}
+.mimic{overflow-x:auto}
+.mimic svg{display:block;min-width:1280px;width:100%;height:auto}
+svg text{font-family:var(--mono);font-size:12px;fill:var(--muted)}
+svg .stn{fill:var(--ink);font-family:var(--body);font-size:13px}
+svg .b{fill:var(--ink);font-weight:500}
+svg .s{font-size:11px}
+.cr{fill:none;stroke-linecap:butt}
+.cr.live{stroke:var(--rail);stroke-width:4} .cr.dead{stroke:var(--dead);stroke-width:2.5} .cr.earth{stroke:var(--earth);stroke-width:3;stroke-dasharray:7 4}
+.cr.eso{stroke:var(--p1);stroke-width:3;stroke-dasharray:3 4}
+.rr{fill:none;stroke:var(--ret);stroke-width:1.5}
+.xo{fill:none;stroke:var(--ret);stroke-width:1.5}
+.fl{fill:none;stroke-width:2} .fl.live{stroke:var(--rail)} .fl.dead{stroke:var(--dead)}
+.flow{fill:none;stroke:var(--flow);stroke-width:2.5;stroke-dasharray:3 9;stroke-linecap:round;pointer-events:none}
+.flow.rev{stroke:var(--regen)}
+.rflow{fill:none;stroke:var(--ret);stroke-width:2;stroke-dasharray:2 10;stroke-linecap:round;pointer-events:none}
+.ret{fill:none;stroke:var(--ret);stroke-width:1.2;stroke-dasharray:3 3}
+.brk{stroke:var(--ink);stroke-width:1.5;cursor:pointer}
+.brk.c{fill:var(--ink)} .brk.o{fill:var(--surface)}
+.brk.alm{stroke:var(--p1);stroke-width:2.5} .brk.amb{stroke:var(--p2);stroke-width:2.5} .brk.stale{stroke-dasharray:2 2}
+.band{fill:var(--sel);opacity:.13;pointer-events:none}
+.hit{fill:none;stroke:transparent;stroke-width:26;cursor:pointer}
+.plat{fill:var(--rule)}
+.box{fill:var(--surface);stroke:var(--rule);stroke-width:1.5}
+.tpbox{cursor:pointer} .tpbox.sel .box{stroke:var(--sel);stroke-width:2.5} .tpbox.bad .box{stroke:var(--p1);stroke-width:2.5} .tpbox.nc .box{stroke-dasharray:4 3}
+.trn rect{fill:var(--surface);stroke:var(--ink);stroke-width:1.5} .trn text{fill:var(--ink);font-size:11px}
+.trn path{fill:var(--ink)}
+.trn.mot rect{stroke:var(--flow);stroke-width:2.5} .trn.reg rect{stroke:var(--regen);stroke-width:2.5} .trn.bad rect{stroke:var(--p2);stroke-width:2.5;stroke-dasharray:3 2}
+.vld{fill:var(--surface);stroke:var(--muted);stroke-width:1.2} .vld.on{fill:var(--p3);stroke:var(--p3)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 18px;font:12px var(--mono);color:var(--muted);margin-top:6px}
+.legend i{display:inline-block;width:22px;height:0;vertical-align:4px;margin-right:6px}
+.sbo{min-height:40px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px dashed var(--rule);border-radius:5px;font:13px var(--mono);margin-top:8px}
+.sbo.armed{border:1.5px solid var(--sel)}
+#msg{color:var(--p2);font-size:13px;min-height:1.3em;margin-top:4px}
+.two{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px}
+@media (max-width:960px){.two{grid-template-columns:minmax(0,1fr)}}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.tabs button[aria-pressed="true"]{border-color:var(--sel);color:var(--sel)}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;margin:6px 0 8px}
+.kv div{font:500 1.1rem var(--mono);font-variant-numeric:tabular-nums}
+.kv small{display:block;font:12px var(--body);color:var(--muted)}
+.dsvg{overflow-x:auto} .dsvg svg{display:block;min-width:560px;width:100%;height:auto}
+.lab{font:600 .78rem var(--display);text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:4px}
+.ctl{display:flex;flex-direction:column;gap:12px}
+.selsec{font:500 13px var(--mono);padding:7px 9px;background:var(--surface);border-radius:5px;border:1px solid var(--rule)}
+.note{font-size:12.5px;color:var(--muted);margin:0}
+.tblw{overflow:auto;max-height:320px}
+table{width:100%;border-collapse:collapse;font:12px var(--mono);font-variant-numeric:tabular-nums}
+th,td{padding:5px 6px;border-bottom:1px solid var(--rule);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:400;position:sticky;top:0;background:var(--panel)}
+td.n,th.n{text-align:right}
+.pr{display:inline-block;min-width:22px;text-align:center;border-radius:3px;font-weight:500;color:var(--panel)}
+.pr1{background:var(--p1)} .pr2{background:var(--p2)} .pr3{background:var(--p3)}
+tr.un td{font-weight:500}
+.e1{color:var(--p1)} .e2{color:var(--p2)} .e3{color:var(--p3)} .eok{color:var(--ok)}
+td button{padding:1px 8px;font-size:11px}
+.prose td{font-family:var(--body);font-size:13px} .prose td:nth-child(2){font-family:var(--mono);white-space:nowrap}
+.tag{font-size:11px;border:1px solid var(--rule);border-radius:3px;padding:0 5px;color:var(--muted);white-space:nowrap}
+.tag.sim{border-color:var(--ok);color:var(--ok)}
+canvas{width:100%;height:190px;display:block}
+.chk{display:flex;gap:6px;align-items:center}
+</style>
+
+<div class="wrap">
+  <section class="card bar">
+    <div><h1>Metro Line 1 traction power</h1>
+      <div class="sub">750 V DC third rail · 20 km double track · 9 stations · 5 TPSS · 4 track paralleling posts · OCC power controller</div></div>
+    <div class="kpis">
+      <div id="kP">0 MW<small>Traction demand</small></div>
+      <div id="kV">0 V<small>Lowest train voltage</small></div>
+      <div id="kR">0 %<small>Regen recovered</small></div>
+      <div id="kT">0<small>Trains in service</small></div>
+    </div>
+    <div class="row" style="gap:14px">
+      <div><div class="clock" id="clk">08:25:00</div><div class="sub">Sim time</div></div>
+      <div class="seg" role="group" aria-label="Simulation speed" id="spd">
+        <button data-s="0">Pause</button><button data-s="1" aria-pressed="true">1×</button><button data-s="5">5×</button><button data-s="20">20×</button></div>
+      <div class="row" id="chips"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="mimic"><svg id="mim" viewBox="0 0 1580 380" role="img" aria-label="Line overview mimic with live current flow"></svg></div>
+    <div class="legend">
+      <span><i style="border-top:4px solid var(--rail)"></i>Conductor rail energised</span>
+      <span><i style="border-top:2px solid var(--dead)"></i>De-energised</span>
+      <span><i style="border-top:3px dashed var(--earth)"></i>Earthed</span>
+      <span><i style="border-top:3px dotted var(--flow)"></i>Traction current (moves with flow)</span>
+      <span><i style="border-top:1.5px solid var(--ret)"></i>Running rails / return</span>
+      <span>■ 72 breaker closed · □ open · ● 89 disconnector</span>
+      <span>Train outline: amber motoring · teal regenerating</span>
+    </div>
+    <div class="sbo" id="sbo"></div>
+    <div id="msg" role="status"></div>
+  </section>
+
+  <div class="two">
+    <section class="card">
+      <h2>Substation detail</h2>
+      <div class="tabs" id="tabs"></div>
+      <div class="kv">
+        <div id="dV">0 V<small>DC bus</small></div><div id="dI">0 kA<small>Rectifier current</small></div>
+        <div id="dP">0 MW<small>Power</small></div><div id="dG">2/2<small>Rectifier groups</small></div><div id="dC">REMOTE<small>Control · link</small></div>
+      </div>
+      <div class="dsvg"><svg id="dsl" viewBox="0 0 700 420" role="img" aria-label="Substation single-line diagram"></svg></div>
+      <div class="row" style="margin-top:8px">
+        <button id="bEn">Energise TPSS</button><button id="bOos">Take rectifiers out</button>
+        <button id="bMv" class="warn">33 kV supply loss</button><button id="bCm">Fail IEC 104 link</button><button id="bLR">Switch to LOCAL</button>
+      </div>
+      <p class="note" style="margin-top:8px">Rectifier outage keeps the feeders closed, so the TPSS bus still links its neighbouring sections. When the DC switchgear itself must come out, close the bypass disconnectors first (ΔV across the gap is near zero while the feeders are still closed), then open the feeders.</p>
+    </section>
+
+    <section class="card ctl">
+      <h2>Section operations</h2>
+      <div><div class="lab">Selected section (click a rail)</div><div class="selsec" id="selsec"></div></div>
+      <div><div class="lab">Faults</div><div class="row">
+        <select id="fT" aria-label="Fault type"><option value="transient">Transient flashover</option><option value="persistent">Persistent short circuit</option></select>
+        <button class="warn" id="bF">Inject</button><button id="bFc">Line patrolled, clear fault</button></div></div>
+      <div><div class="lab">Emergency trip (ETS)</div><div class="row"><button class="warn" id="bEts">Operate ETS</button><button id="bEtsR">Reset ETS</button></div></div>
+      <div><div class="lab">Permit-to-work sequence</div><div class="row">
+        <button id="bIso">1 · Isolate</button><button id="bEa">2 · Apply earth</button><button id="bEr">3 · Remove earth</button><button id="bRs">4 · Restore</button></div></div>
+      <div><div class="lab">Configuration</div>
+        <div class="row" style="gap:14px">
+          <label class="chk"><span>Trains</span><select id="nT"><option>4</option><option>6</option><option selected>8</option><option>10</option><option>12</option></select></label>
+          <label class="chk"><span>Feeder Imax</span><select id="cIm"><option value="6000">6 kA</option><option value="8000" selected>8 kA</option><option value="10000">10 kA</option></select></label>
+          <label class="chk"><input type="checkbox" id="cTie" checked> Paralleling ties</label>
+          <label class="chk"><span>Reversible TPSS</span><select id="cInv"><option value="none">None</option><option value="one" selected>TPSS-03 only</option><option value="all">All five</option></select></label>
+          <label class="chk"><input type="checkbox" id="cRet" checked> Show return current</label>
+        </div></div>
+      <p class="note">Suggested runs. (1) Persistent fault on UP S2: the tie trips first and keeps DN alive. The near feeder trips on 76, the far one by 85 intertrip if its current is under Imax. Then 3 line tests and a lockout. (2) 33 kV loss at TPSS-03 with ties open, then with ties closed: compare the lowest train voltage. (3) Set Reversible TPSS to None, then All five, and compare "Regen recovered" in the header.</p>
+    </section>
+  </div>
+
+  <div class="two">
+    <section class="card">
+      <h2>Load flow by section</h2>
+      <div class="tblw"><table><thead><tr><th>Section</th><th>State</th><th>Feeding</th><th class="n">W end kA</th><th class="n">E end kA</th><th class="n">Trains</th><th class="n">Min V</th><th class="n">Rail pot. V</th></tr></thead><tbody id="lf"></tbody></table></div>
+    </section>
+    <section class="card">
+      <h2>TPSS bus voltage · last 5 min</h2>
+      <canvas id="tr" aria-label="TPSS bus voltage trend"></canvas>
+      <div class="legend" id="tlg"></div>
+    </section>
+  </div>
+
+  <div class="two">
+    <section class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Alarms · ISA-18.2</h2><button id="bAck">Acknowledge all</button></div>
+      <div class="tblw"><table><thead><tr><th>P</th><th>Time</th><th>Tag</th><th>Message</th><th>State</th><th></th></tr></thead><tbody id="al"></tbody></table></div>
+    </section>
+    <section class="card">
+      <h2>Sequence of events · ms time tags</h2>
+      <div class="tblw"><table><thead><tr><th>Time</th><th>Event</th></tr></thead><tbody id="soe"></tbody></table></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>How the network is linked</h2>
+    <div class="tblw" style="max-height:none"><table class="prose"><thead><tr><th>Element</th><th>Device</th><th>Role on this line</th></tr></thead><tbody>
+      <tr><td>Section gap</td><td>insulated gap</td><td>Splits each track's conductor rail into 4 sections at the substations. Gaps sit at platform ends so a stopped train never bridges them.</td></tr>
+      <tr><td>Double-end feeding</td><td>2 × 72 per section</td><td>Every section is fed by the TPSS at each end, so all five substations run in parallel through the rails and share load.</td></tr>
+      <tr><td>Track paralleling post</td><td>72 tie (TPP)</td><td>Joins the UP and DN conductor rails mid-section to cut voltage drop. Its own di/dt relay trips first on a fault so the healthy track stays live.</td></tr>
+      <tr><td>Feeder disconnector</td><td>89 (QS)</td><td>Visible isolation after each HSCB. Off-load only, interlocked with the HSCB.</td></tr>
+      <tr><td>Bypass disconnector</td><td>89 (QB)</td><td>Bridges the gap at a TPSS when its DC switchgear is out. Closes only when both sides are dead, or both are live with ΔV below 30 V.</td></tr>
+      <tr><td>Return circuit</td><td>running rails, cross bonds</td><td>Both tracks' running rails are cross-bonded and return current to each TPSS negative bus. They are insulated from earth, with VLDs at stations.</td></tr>
+      <tr><td>Signalling interface</td><td>traction power status</td><td>Trains are held before a dead or earthed section and are never driven into it.</td></tr>
+      <tr><td>Rectifier diodes</td><td>12-pulse bridge</td><td>Block reverse power. Regen can only go to other trains, a reversible TPSS inverter, or on-board brake resistors.</td></tr>
+    </tbody></table></div>
+    <h2 style="margin-top:16px">Design basis</h2>
+    <div class="tblw" style="max-height:none"><table class="prose"><thead><tr><th>Area</th><th>Standard</th><th>Applied here</th><th></th></tr></thead><tbody>
+      <tr><td>Supply voltage</td><td>IEC 60850</td><td>750 V nominal. Umin1 500 V, Umax1 900 V, Umax2 1000 V. Trains reduce traction power linearly below 650 V and limit regeneration above 900 V.</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>Rectifiers</td><td>IEC 60146-1-1 · IEEE 1653.2</td><td>Two 12-pulse diode groups per TPSS, 825 V no-load, 22 mΩ each. Reverse current is blocked.</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>DC switchgear</td><td>IEC 61992 · IEEE C37.14</td><td>HSCB functions: 76 (Imax, di/dt), 85 intertrip, 49 thermal, 27 undervoltage, 79 line test and reclose, 86 lockout. Tie breakers have selective di/dt.</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>Load flow</td><td>IEEE 1653.3</td><td>Nodal solution every 100 ms covering buses, cables, gaps, bypasses, ties, rail segments, constant-power trains, diodes and a current-limited inverter.</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>Touch voltage</td><td>IEC 62128-1</td><td>Rail potential estimated from return-rail resistance. VLD operates above 120 V.</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>Stray current · insulation · EMC</td><td>IEC 62128-2 · 62497-1 · 62236</td><td>Floating return circuit, clearances, and compatibility with signalling.</td><td><span class="tag">Design basis</span></td></tr>
+      <tr><td>Substation automation</td><td>IEC 61850</td><td>GOOSE interlocks between cubicles. 85 intertrip between adjacent TPSS over fibre.</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>Telecontrol</td><td>IEC 60870-5-104</td><td>Select-before-operate (10 s window), spontaneous events with ms time tags, quality "not topical" on link loss, general interrogation on recovery.</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>HMI · alarms</td><td>ISA-101 · ISA-18.2 / IEC 62682</td><td>Muted normal state with state shown by shape. Three alarm priorities with unack, ack and return-to-normal states.</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>Reference designation</td><td>IEC 81346</td><td>Tags like =TPSS03-QF12 (TPSS 3, UP track, east feeder).</td><td><span class="tag sim">Simulated</span></td></tr>
+      <tr><td>Cyber security</td><td>IEC 62443</td><td>OCC, TPSS and TPP zones joined by firewalled conduits.</td><td><span class="tag">Design basis</span></td></tr>
+    </tbody></table></div>
+    <p class="note" style="margin-top:8px">All values are representative for a 750 V metro and are not taken from any specific project.</p>
+  </section>
+</div>
+
+<script>
+/*CORE*/
+const C={VNL:825,RG:.022,RCAB:.004,RBY:.0005,RTIE:.01,RLOOP:.020,RRAIL:.008,RF:.005,
+  UMIN1:500,UMAX1:900,UMAX2:1000,M:210e3,AMAX:1.0,BRK:1.0,VMAX:22.2,PW:2.6e6,PEB:2.6e6,AUX:.12e6,ETA:.88,
+  INV_V:832,INV_G:100,INV_I:3000,INOM:4000,TAU:60};
+const STN=[[0,"Depot Junction"],[2.5,"Riverside"],[5,"Market Square"],[7.5,"Old Mill"],[10,"Central"],[12.5,"Museum"],[15,"Tech Park"],[17.5,"University"],[20,"Lakeside"]];
+const TPN=["Depot Junction","Market Square","Central","Tech Park","Lakeside"];
+const GAP=[0,4.88,9.88,14.88,20], SEC=[[0,4.88],[4.88,9.88],[9.88,14.88],[14.88,20]], TIE=[2.5,7.5,12.5,17.5], TRK=["UP","DN"];
+const XO={E:[19.0,19.3],W:[0.7,1.0]};
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const p2=n=>String(n).padStart(2,"0");
+const TPn=k=>"TPSS-0"+(k+1), tg=(k,d)=>`=TPSS0${k+1}-${d}`, fN=(t,sd)=>`QF${t+1}${sd+1}`, qN=(t,sd)=>`QS${t+1}${sd+1}`;
+const secAt=x=>x<SEC[0][1]?0:x<SEC[1][1]?1:x<SEC[2][1]?2:3;
+const mkF=()=>({c:1,d:1,st:"N",I:0,th:.2,seq:0});
+const S={t:8*3600+25*60,acc:0,speed:1,q:[],ev:[],evv:0,alarms:[],av:0,tp:[],
+  B:[[0,0,0,0,0],[0,0,0,0,0]],BI:[[0,0,0,0,0],[0,0,0,0,0]],T:[0,1,2,3].map(()=>({c:1,st:"N",I:0,seq:0})),
+  eso:[[0,0,0,0],[0,0,0,0]],earth:[[0,0,0,0],[0,0,0,0]],fault:null,trains:[],live:new Set(),V:{},src:[],inv:[0,0,0,0,0],chains:[[],[]],
+  cfg:{imax:8000},vld:STN.map(()=>0),E:{trac:0,reg:0,rheo:0},hist:[],lastH:0};
+for(let k=0;k<5;k++)S.tp.push({mv:1,q:[1,1],inc:[1,1],F:[[k>0?mkF():null,k<4?mkF():null],[k>0?mkF():null,k<4?mkF():null]],V:0,I:0,IV:0,lr:"R",comms:1,snap:null,inv:k==2});
+const F=(k,t,sd)=>S.tp[k].F[t][sd];
+
+const fmt=t=>{const s=Math.floor(t),ms=Math.round((t-s)*1000);return `${p2(Math.floor(s/3600)%24)}:${p2(Math.floor(s/60)%60)}:${p2(s%60)}.${String(ms%1000).padStart(3,"0")}`};
+function ev(text,cls="",ms=0){S.ev.unshift({t:S.t+ms/1000,text,cls});if(S.ev.length>250)S.ev.pop();S.evv++}
+function alarm(tag,p,text){if(S.alarms.find(a=>a.tag==tag&&a.active))return;S.alarms.push({tag,p,text,t:S.t,active:true,ack:false});S.av++}
+function rtn(tag){const a=S.alarms.find(a=>a.tag==tag&&a.active);if(!a)return;a.active=false;if(a.ack)S.alarms.splice(S.alarms.indexOf(a),1);S.av++}
+function ack(a){a.ack=true;if(!a.active)S.alarms.splice(S.alarms.indexOf(a),1);S.av++}
+const at=(d,f)=>S.q.push({t:S.t+d,f});
+
+/* topology */
+const srcN=k=>{const p=S.tp[k];return p.mv?[0,1].filter(i=>p.q[i]&&p.inc[i]).length:0};
+const secLive=(t,s)=>S.live.has("x"+s+t);
+function zone(t,s){let a=s,b=s;while(a>0&&S.B[t][a])a--;while(b<3&&S.B[t][b+1])b++;const r=[];for(let x=a;x<=b;x++)r.push(x);return r}
+function zoneFeeders(t,secs){const r=[];secs.forEach(s=>{r.push([s,t,1]);r.push([s+1,t,0])});return r.filter(([k,tt,sd])=>F(k,tt,sd))}
+const secName=secs=>secs.map(s=>"S"+(s+1)).join("+");
+function buildLive(){const adj={};const e=(a,b)=>{(adj[a]=adj[a]||[]).push(b);(adj[b]=adj[b]||[]).push(a)};
+  S.tp.forEach((p,k)=>p.F.forEach((row,t)=>row.forEach((f,sd)=>{if(f&&f.c&&f.d)e("b"+k,(sd?"E":"W")+k+t)})));
+  for(let t=0;t<2;t++){for(let s=0;s<4;s++){e("E"+s+t,"x"+s+t);e("x"+s+t,"W"+(s+1)+t)}for(let k=1;k<4;k++)if(S.B[t][k])e("W"+k+t,"E"+k+t)}
+  for(let s=0;s<4;s++)if(S.T[s].c)e("x"+s+"0","x"+s+"1");
+  const live=new Set(),st=[];for(let k=0;k<5;k++)if(srcN(k)){live.add("b"+k);st.push("b"+k)}
+  while(st.length){const n=st.pop();(adj[n]||[]).forEach(m=>{if(!live.has(m)){live.add(m);st.push(m)}})}S.live=live}
+
+/* nodal load flow */
+function gauss(A,b){const n=b.length;for(let c=0;c<n;c++){let p=c;for(let r=c+1;r<n;r++)if(Math.abs(A[r][c])>Math.abs(A[p][c]))p=r;
+  if(p!=c){[A[c],A[p]]=[A[p],A[c]];[b[c],b[p]]=[b[p],b[c]]}const d=A[c][c];if(Math.abs(d)<1e-12)continue;
+  for(let r=c+1;r<n;r++){const f=A[r][c]/d;if(!f)continue;const Ar=A[r],Ac=A[c];for(let j=c;j<n;j++)Ar[j]-=f*Ac[j];b[r]-=f*b[c]}}
+  const x=new Float64Array(n);for(let r=n-1;r>=0;r--){let s=b[r];for(let j=r+1;j<n;j++)s-=A[r][j]*x[j];x[r]=A[r][r]?s/A[r][r]:0}return x}
+const tI=(tr,V)=>{const v=Math.max(V,250),P=C.AUX+tr.Pm+tr.Pr*tr.rk;let I=P/v;if(P>0)I=Math.min(I,Math.max(5500*clamp((V-C.UMIN1)/150,0,1),C.AUX/v));return I};
+function solve(){
+  const ix={},keys=[];const add=k=>{if(ix[k]==null){ix[k]=keys.length;keys.push(k)}};S.live.forEach(add);
+  const trs=S.trains.filter(t=>t.on);trs.forEach(t=>add("n"+t.id));
+  const f=S.fault&&secLive(S.fault.t,S.fault.s)?S.fault:null;if(f)add("f");
+  S.chains=[[],[]];
+  for(let t=0;t<2;t++)for(let s=0;s<4;s++){if(!secLive(t,s)){S.chains[t][s]=null;continue}
+    const ch=[{k:"E"+s+t,x:SEC[s][0]},{k:"x"+s+t,x:TIE[s]},{k:"W"+(s+1)+t,x:SEC[s][1]}];
+    trs.forEach(tr=>{if(tr.t==t&&tr.s==s)ch.push({k:"n"+tr.id,x:tr.pos})});if(f&&f.t==t&&f.s==s)ch.push({k:"f",x:f.pos});
+    ch.sort((a,b)=>a.x-b.x);S.chains[t][s]=ch}
+  const n=keys.length,src=S.tp.map((p,k)=>ix["b"+k]!=null&&srcN(k)>0),inv=S.tp.map(()=>0);
+  let V=new Float64Array(n);
+  for(let it=0;it<14&&n;it++){
+    const A=Array.from({length:n},()=>new Float64Array(n)),b=new Float64Array(n);
+    const g=(p,q,G)=>{const i=ix[p];if(q==null){A[i][i]+=G;return}const j=ix[q];A[i][i]+=G;A[j][j]+=G;A[i][j]-=G;A[j][i]-=G};
+    for(let i=0;i<n;i++)A[i][i]+=1e-6;
+    S.tp.forEach((p,k)=>p.F.forEach((row,t)=>row.forEach((fd,sd)=>{const e=(sd?"E":"W")+k+t;if(fd&&fd.c&&fd.d&&ix["b"+k]!=null&&ix[e]!=null)g("b"+k,e,1/C.RCAB)})));
+    for(let t=0;t<2;t++)for(let k=1;k<4;k++)if(S.B[t][k]&&ix["W"+k+t]!=null)g("W"+k+t,"E"+k+t,1/C.RBY);
+    for(let s=0;s<4;s++)if(S.T[s].c&&ix["x"+s+"0"]!=null)g("x"+s+"0","x"+s+"1",1/C.RTIE);
+    S.chains.forEach(row=>row.forEach(ch=>{if(!ch)return;for(let i=1;i<ch.length;i++)g(ch[i-1].k,ch[i].k,1/(C.RLOOP*Math.max(ch[i].x-ch[i-1].x,.002)))}));
+    if(f)g("f",null,1/C.RF);
+    src.forEach((on,k)=>{if(on){const G=srcN(k)/C.RG,i=ix["b"+k];A[i][i]+=G;b[i]+=C.VNL*G}});
+    inv.forEach((m,k)=>{const i=ix["b"+k];if(m==1){A[i][i]+=C.INV_G;b[i]+=C.INV_V*C.INV_G}else if(m==2)b[i]-=C.INV_I});
+    trs.forEach(tr=>b[ix["n"+tr.id]]-=tr.I);
+    V=gauss(A,b);let ch=false;
+    src.forEach((on,k)=>{const i=ix["b"+k];if(i==null||!srcN(k))return;if(on&&V[i]>C.VNL+.01){src[k]=false;ch=true}else if(!on&&V[i]<C.VNL-.01){src[k]=true;ch=true}});
+    if((src.every(o=>!o)||V.some(v=>v>1200||v<-50))&&trs.some(tr=>tr.Pr<0&&tr.rk>0)){trs.forEach(tr=>{if(tr.Pr<0){tr.rk=0;tr.I=tI(tr,800)}});ch=true}
+    S.tp.forEach((p,k)=>{const i=ix["b"+k];if(!p.inv||i==null)return;const v=V[i];
+      if(inv[k]==0&&v>C.INV_V+.5){inv[k]=1;ch=true}else if(inv[k]==1){const I=(v-C.INV_V)*C.INV_G;if(I<0){inv[k]=0;ch=true}else if(I>C.INV_I){inv[k]=2;ch=true}}else if(inv[k]==2&&v<C.INV_V){inv[k]=0;ch=true}});
+    trs.forEach(tr=>{const v=V[ix["n"+tr.id]];if(tr.Pr<0&&v>C.UMAX1&&tr.rk>0){tr.rk=Math.max(0,tr.rk-.2);ch=true}const ni=tI(tr,v);if(Math.abs(ni-tr.I)>4)ch=true;tr.I=ni});
+    if(!ch)break}
+  S.V={};keys.forEach((k,i)=>S.V[k]=V[i]);S.src=src;S.inv=inv}
+function results(){const V=S.V;
+  S.trains.forEach(tr=>{tr.V=tr.on?(V["n"+tr.id]||0):0;if(!tr.on)tr.I=0;const pf=tr.Pm>1e4?clamp((tr.I*tr.V-C.AUX)/tr.Pm,0,1):1;tr.pf=.5*(tr.pf??1)+.5*pf});
+  S.tp.forEach((p,k)=>{const b="b"+k;p.V=V[b]!=null&&S.live.has(b)?V[b]:0;p.I=S.src[k]?(C.VNL-p.V)*srcN(k)/C.RG:0;
+    p.IV=S.inv[k]==1?(p.V-C.INV_V)*C.INV_G:S.inv[k]==2?C.INV_I:0;
+    p.F.forEach((row,t)=>row.forEach((fd,sd)=>{if(!fd)return;const e=(sd?"E":"W")+k+t;fd.I=fd.c&&fd.d&&V[e]!=null&&V[b]!=null?(V[b]-V[e])/C.RCAB:0}))});
+  for(let t=0;t<2;t++)for(let k=1;k<4;k++)S.BI[t][k]=S.B[t][k]&&V["W"+k+t]!=null?(V["W"+k+t]-V["E"+k+t])/C.RBY:0;
+  S.T.forEach((T,s)=>T.I=T.c&&V["x"+s+"0"]!=null?(V["x"+s+"0"]-V["x"+s+"1"])/C.RTIE:0);
+  S.chains.forEach(row=>row.forEach(ch=>{if(!ch)return;for(let i=0;i<ch.length-1;i++)ch[i].I=(V[ch[i].k]-V[ch[i+1].k])/(C.RLOOP*Math.max(ch[i+1].x-ch[i].x,.002))}))}
+
+/* trains & signalling */
+function seedTrains(n){S.trains=[];for(let i=0;i<n;i++){const u=(i+(i?Math.random()*.3-.15:0))*34/n;const t=u<17?0:1,pos=u<17?1.5+u:18.5-(u-17);
+  S.trains.push({id:i+1,t,dir:t?-1:1,pos,v:12,mode:"run",dw:0,term:null,xz:null,Pm:0,Pr:0,I:0,V:780,rk:1,on:true,s:secAt(pos),U:0,a:0})}}
+function targets(tr){const d=tr.dir,p=tr.pos,list=[];
+  const st=d>0?STN.find(s=>s[0]>p+1e-4):[...STN].reverse().find(s=>s[0]<p-1e-4);if(st)list.push({x:st[0],stn:true,why:"station"});
+  S.trains.forEach(o=>{if(o===tr)return;const dd=(o.pos-p)*d;if(dd<=0)return;
+    const sameTrack=o.t==tr.t||(tr.xz=="E"&&o.t==1&&o.dir<0)||(tr.xz=="W"&&o.t==0&&o.dir>0);if(!sameTrack)return;
+    if(tr.xz=="E"&&o.t==0&&o.dir>0&&o.pos<XO.E[0])return;if(tr.xz=="W"&&o.t==1&&o.dir<0&&o.pos>XO.W[1])return;
+    list.push({x:o.pos-d*.4,stn:false,why:"train ahead"})});
+  if(tr.t==0&&d>0&&!tr.xz&&p<XO.E[0]&&S.trains.some(o=>o!==tr&&((o.t==0&&o.pos>=XO.E[0])||o.xz=="E")))list.push({x:XO.E[0]-.15,stn:false,why:"terminal occupied"});
+  if(tr.t==1&&d<0&&!tr.xz&&p>XO.W[1]&&S.trains.some(o=>o!==tr&&((o.t==1&&o.pos<=XO.W[1])||o.xz=="W")))list.push({x:XO.W[1]+.15,stn:false,why:"terminal occupied"});
+  const s=secAt(p);const ns=s+d;if(ns>=0&&ns<=3&&!tr.xz){const bnd=d>0?SEC[s][1]:SEC[s][0];
+    if(!secLive(tr.t,ns)||S.earth[tr.t][ns])list.push({x:bnd-d*.15,stn:false,why:"next section dead"})}
+  let best=null;list.forEach(c=>{const dd=(c.x-p)*d;const cc=dd<0?{...c,x:p}:c;if(!best||(cc.x-p)*d<(best.x-p)*d)best=cc});return best||{x:p,stn:false,why:"end"}}
+function canDepart(tr){if(tr.term=="E")return!S.trains.some(o=>o!==tr&&o.t==1&&o.pos>18.3&&o.pos<XO.E[0]+.01)&&!S.trains.some(o=>o!==tr&&o.xz=="E");
+  if(tr.term=="W")return!S.trains.some(o=>o!==tr&&o.t==0&&o.pos>XO.W[1]-.01&&o.pos<1.7)&&!S.trains.some(o=>o!==tr&&o.xz=="W");return true}
+function trainStep(tr,dt){tr.s=secAt(tr.pos);const live=secLive(tr.t,tr.s)&&!S.earth[tr.t][tr.s];tr.on=live;
+  const fV=live?(tr.pf??1):0,res=.008+.00006*tr.v*tr.v;let a=0;tr.Pm=0;tr.Pr=0;
+  if(tr.mode=="dwell"){tr.dw-=dt;if(tr.dw<=0&&canDepart(tr)){tr.mode="run";if(tr.term=="E"){tr.dir=-1;tr.xz="E"}else if(tr.term=="W"){tr.dir=1;tr.xz="W"}tr.term=null}}
+  else{const tgt=targets(tr);tr.why=tgt.why;const d=Math.max(0,(tgt.x-tr.pos)*tr.dir*1000);
+    const need=d>.5?tr.v*tr.v/(2*d):(tr.v>0?9:0);let aw=0;
+    if(!live){a=-res;aw=0}
+    else if(tr.v>0&&need>=.85*C.BRK){a=-Math.min(1.3,need);aw=a+res}
+    else if(d<=.5){a=0;aw=0}
+    else if(tr.v<C.VMAX-.3){aw=Math.min(C.AMAX+res,C.PW/(C.M*Math.max(tr.v,2)))*fV;a=aw-res}
+    else{aw=res;a=0}
+    if(live&&aw>0)tr.Pm=C.M*aw*tr.v/C.ETA;
+    if(live&&aw<0&&tr.v>3)tr.Pr=-Math.min(C.M*(-aw)*tr.v,C.PEB)*C.ETA;
+    tr.v=clamp(tr.v+a*dt,0,C.VMAX);
+    const ds=tr.v*dt/1000,rem=Math.abs(tgt.x-tr.pos);tr.pos+=tr.dir*Math.min(ds,rem);
+    if(Math.abs(tgt.x-tr.pos)<5e-4&&tr.v<.4&&tgt.stn){tr.v=0;tr.pos=tgt.x;tr.mode="dwell";
+      if(tgt.x>=20&&tr.dir>0){tr.term="E";tr.dw=100}else if(tgt.x<=0&&tr.dir<0){tr.term="W";tr.dw=100}else tr.dw=24+Math.random()*14}
+    else if(Math.abs(tgt.x-tr.pos)<5e-4&&tr.v<.4)tr.v=0;
+    if(tr.xz=="E"){if(tr.t==0&&tr.pos<=(XO.E[0]+XO.E[1])/2)tr.t=1;if(tr.pos<XO.E[0])tr.xz=null}
+    if(tr.xz=="W"){if(tr.t==1&&tr.pos>=(XO.W[0]+XO.W[1])/2)tr.t=0;if(tr.pos>XO.W[1])tr.xz=null}}
+  tr.a=a;if(tr.Pr<0||tr.V<880)tr.rk=Math.min(1,tr.rk+.03);tr.s=secAt(tr.pos)}
+
+/* breakers, protection, restoration */
+function closeF(k,t,sd,why){const f=F(k,t,sd);f.c=1;f.st="N";f.seq++;rtn(tg(k,fN(t,sd))+"-TRIP");ev(`${tg(k,fN(t,sd))} 72 CLOSED · ${why}`,"eok")}
+function tieClose(s,why){const T=S.T[s];buildLive();if(!(secLive(0,s)&&secLive(1,s)))return`Interlock: both tracks of S${s+1} must be live`;
+  const dV=Math.abs((S.V["x"+s+"0"]||0)-(S.V["x"+s+"1"]||0));if(dV>50)return`Interlock: ΔV ${Math.round(dV)} V above 50 V`;
+  T.c=1;T.st="N";T.seq++;rtn(`=TPP0${s+1}-QT-TRIP`);ev(`=TPP0${s+1}-QT 72 CLOSED · ${why} · ΔV ${Math.round(dV)} V`,"eok");return""}
+function restoreZone(t,secs,auto,att){
+  const fs=zoneFeeders(t,secs).filter(([k,tt,sd])=>!F(k,tt,sd).c);
+  if(secs.some(s=>S.eso[t][s]||S.earth[t][s])){fs.forEach(([k,tt,sd])=>F(k,tt,sd).st="BLK");return ev(`${TRK[t]} ${secName(secs)} 79 blocked: ETS or earth applied`,"e2")}
+  buildLive();const m=fs.find(([k,tt,sd])=>{const f=F(k,tt,sd);return f.d&&f.st!="LO"&&S.live.has("b"+k)});
+  if(!m)return ev(`${TRK[t]} ${secName(secs)} restoration not possible: no feeder with a live bus`,"e2");
+  const [mk,mt,ms]=m,mf=F(mk,mt,ms);mf.st="LT";const sq=++mf.seq;ev(`${tg(mk,fN(mt,ms))} 79 line test #${att} on ${TRK[t]} ${secName(secs)} (master end)`);
+  const followers=()=>{let d=0;fs.forEach(([k,tt,sd])=>{if(k==mk&&sd==ms)return;const f=F(k,tt,sd);const q=++f.seq;
+      at(d+=.6,()=>{if(f.seq!=q||f.c||f.st=="LO")return;buildLive();if(!f.d||!S.live.has("b"+k)){f.st="TRIP";return ev(`${tg(k,fN(tt,sd))} live-line close skipped: ${!f.d?"QS open":"bus dead"}`,"e2")}
+        closeF(k,tt,sd,"live-line check, line energised from remote end")})});
+    secs.forEach(s=>{if(!S.T[s].c&&cfgTies())at(d+1.5,()=>{const r=tieClose(s,"auto, both tracks live");if(r)ev(`=TPP0${s+1}-QT reclose deferred: ${r}`,"e3")})})};
+  at(2,()=>{if(mf.seq!=sq||mf.c)return;buildLive();
+    if(secs.some(s=>secLive(t,s))){closeF(mk,mt,ms,"live-line check");return followers()}
+    if(S.fault&&S.fault.t==t&&secs.includes(S.fault.s)){ev(`${tg(mk,fN(mt,ms))} line test #${att} FAILED · R = ${(.02+Math.random()*.03).toFixed(3)} Ω`,"e1");mf.st="TRIP";
+      if(auto&&att<3)at(8,()=>restoreZone(t,secs,true,att+1));
+      else if(auto){fs.forEach(([k,tt,sd])=>{F(k,tt,sd).st="LO";alarm(tg(k,fN(tt,sd))+"-LO",1,`${fN(tt,sd)} 86 lockout, 3 line tests failed`)});ev(`${TRK[t]} ${secName(secs)} 86 LOCKOUT · patrol the line, then clear the fault`,"e1")}
+      return}
+    const n=S.trains.filter(tr=>tr.t==t&&secs.includes(tr.s)).length;
+    ev(`${tg(mk,fN(mt,ms))} line test #${att} passed · R = ${n?(4.7/n).toFixed(1):">100"} Ω (${n} trains on section)`,"eok");
+    closeF(mk,mt,ms,auto?"79 auto-reclose":"operator restore");followers()})}
+function protect(){const f=S.fault;buildLive();if(!f||!secLive(f.t,f.s))return;solve();results();
+  const T=S.T[f.s];if(T.c){T.c=0;T.st="TRIP";T.seq++;ev(`=TPP0${f.s+1}-QT 72 OPEN · 76 di/dt, infeed from ${TRK[1-f.t]} ${(Math.abs(T.I)/1000).toFixed(1)} kA`,"e1",9);alarm(`=TPP0${f.s+1}-QT-TRIP`,1,`Tie QT${f.s+1} trip, selective`)}
+  const secs=zone(f.t,f.s);const list=zoneFeeders(f.t,secs).filter(x=>F(...x).c).sort((a,b)=>Math.abs(GAP[a[0]]-f.pos)-Math.abs(GAP[b[0]]-f.pos));
+  list.forEach(([k,t,sd],i)=>{const fd=F(k,t,sd),I=Math.abs(fd.I),own=i==0||I>=S.cfg.imax;fd.c=0;fd.st="TRIP";fd.seq++;
+    ev(`${tg(k,fN(t,sd))} 72 OPEN · `+(own?`76 ${I>=S.cfg.imax?"Imax":"di/dt"} · ${(I/1000).toFixed(1)} kA`:`85 intertrip from ${TPn(list[0][0])} · own relay saw ${(I/1000).toFixed(1)} kA < Imax ${S.cfg.imax/1000} kA`),"e1",own?15+i*2:26+i*2);
+    alarm(tg(k,fN(t,sd))+"-TRIP",1,`${fN(t,sd)} trip (${own?"76":"85 intertrip"})`)});
+  if(f.type=="transient"){S.fault=null;ev("Arc extinguished, transient fault gone","",40)}
+  if(!secs.some(s=>S.eso[f.t][s]))at(3,()=>restoreZone(f.t,secs,true,1))}
+let cfgTies=()=>true;
+
+/* commands */
+function occOK(k){const p=S.tp[k];if(p.lr=="L")return`${TPn(k)} is in LOCAL control`;if(!p.comms)return`${TPn(k)} telecontrol link down`;return""}
+function cmdF(k,t,sd,close){const f=F(k,t,sd);
+  if(!close){if(!f.c)return"Already open";f.c=0;f.st=f.st=="LO"?"LO":"N";f.seq++;ev(`${tg(k,fN(t,sd))} 72 OPEN · operator`);return""}
+  if(f.c)return"Already closed";if(!f.d)return`Interlock: ${qN(t,sd)} feeder disconnector is open`;if(f.st=="LO")return"86 lockout active: clear the fault after line patrol";
+  const secs=zone(t,sd?k:k-1);if(secs.some(s=>S.eso[t][s]))return"Interlock: ETS active on the section";if(secs.some(s=>S.earth[t][s]))return"Interlock: section earthed";
+  buildLive();if(!S.live.has("b"+k))return"Interlock: DC bus dead";
+  if(secs.some(s=>secLive(t,s))){closeF(k,t,sd,"operator, live-line check");return""}
+  f.st="LT";const q=++f.seq;ev(`${tg(k,fN(t,sd))} line test before close`);
+  at(2,()=>{if(f.seq!=q)return;if(S.fault&&S.fault.t==t&&secs.includes(S.fault.s)){f.st="TRIP";return ev(`${tg(k,fN(t,sd))} line test FAILED · close aborted`,"e1")}closeF(k,t,sd,"operator, line test passed")});return""}
+function cmdD(k,t,sd,close){const f=F(k,t,sd);if(f.c)return`Interlock: open ${fN(t,sd)} first (${qN(t,sd)} is off-load)`;
+  if(close){if(f.d)return"Already closed";if(S.earth[t][sd?k:k-1])return"Interlock: section earthed";f.d=1;if(f.st=="BLK")f.st="N";ev(`${tg(k,qN(t,sd))} 89 CLOSED`,"eok")}
+  else{if(!f.d)return"Already open";f.d=0;ev(`${tg(k,qN(t,sd))} 89 OPEN · visible isolation`)}return""}
+function cmdB(k,t,close){buildLive();const a=k-1,b=k;
+  if(close){if(S.B[t][k])return"Already closed";if(S.earth[t][a]||S.earth[t][b]||S.eso[t][a]||S.eso[t][b])return"Interlock: adjacent section earthed or ETS";
+    const la=secLive(t,a),lb=secLive(t,b);if(la!=lb)return"Interlock: one side dead. 89B is off-load, so both sides must be dead or both live";
+    if(la&&lb){const dV=Math.abs(S.V["W"+k+t]-S.V["E"+k+t]);if(dV>30)return`Interlock: ΔV ${Math.round(dV)} V above 30 V`}
+    S.B[t][k]=1;ev(`${tg(k,"QB"+(t+1))} 89 CLOSED · ${TRK[t]} S${a+1} and S${b+1} joined across gap`,"eok")}
+  else{if(!S.B[t][k])return"Already open";if(Math.abs(S.BI[t][k])>100&&!(F(k,t,0).c&&F(k,t,1).c))return`Interlock: 89B carrying ${Math.round(Math.abs(S.BI[t][k]))} A. Close the TPSS feeders to take the load first`;
+    S.B[t][k]=0;ev(`${tg(k,"QB"+(t+1))} 89 OPEN`)}return""}
+function cmdT(s,close){const T=S.T[s];if(close){if(T.c)return"Already closed";return tieClose(s,"operator")}if(!T.c)return"Already open";T.c=0;T.st="N";T.seq++;ev(`=TPP0${s+1}-QT 72 OPEN · operator`);return""}
+function cmdQ(k,i,close){const p=S.tp[k];if(close){if(p.q[i])return"Already closed";if(!p.mv)return"No 33 kV supply";p.q[i]=1;ev(`${tg(k,"Q"+(i+1))} 52 CLOSED · T${i+1} energised`,"eok")}
+  else{if(!p.q[i])return"Already open";p.q[i]=0;ev(`${tg(k,"Q"+(i+1))} 52 OPEN`);if(p.inc[i]){p.inc[i]=0;ev(`${tg(k,"QR"+(i+1))} 72 OPEN · intertrip from Q${i+1}`,"e2")}}return""}
+function cmdR(k,i,close){const p=S.tp[k];if(close){if(p.inc[i])return"Already closed";if(!(p.mv&&p.q[i]))return`Interlock: rectifier R${i+1} not energised`;p.inc[i]=1;rtn(tg(k,"QR"+(i+1))+"-TRIP");ev(`${tg(k,"QR"+(i+1))} 72 CLOSED · R${i+1} on bus`,"eok")}
+  else{if(!p.inc[i])return"Already open";p.inc[i]=0;ev(`${tg(k,"QR"+(i+1))} 72 OPEN`)}return""}
+
+/* simulation step */
+function step(dt){S.t+=dt;S.q.sort((a,b)=>a.t-b.t);while(S.q.length&&S.q[0].t<=S.t)S.q.shift().f();
+  buildLive();S.trains.forEach(tr=>trainStep(tr,dt));S.trains.forEach(tr=>{tr.on=tr.on&&secLive(tr.t,tr.s);tr.I=tr.on?tI(tr,tr.V||750):0});
+  solve();results();
+  S.trains.forEach(tr=>{if(!tr.on)return;S.E.trac+=tr.Pm*dt;S.E.reg+=-tr.Pr*tr.rk*dt;S.E.rheo+=-tr.Pr*(1-tr.rk)*dt});
+  S.tp.forEach((p,k)=>{if(p.V>C.UMAX1)alarm(tg(k,"DC")+"-OV",3,`DC bus ${Math.round(p.V)} V above Umax1`);else if(p.V<880)rtn(tg(k,"DC")+"-OV");
+    p.F.forEach((row,t)=>row.forEach((fd,sd)=>{if(!fd)return;fd.th+=((fd.I/C.INOM)**2-fd.th)*dt/C.TAU;
+      if(fd.c&&fd.th>1.2){fd.c=0;fd.st="TH";fd.seq++;alarm(tg(k,fN(t,sd))+"-TH",2,`${fN(t,sd)} 49 thermal trip`);ev(`${tg(k,fN(t,sd))} 72 OPEN · 49 thermal overload θ ${Math.round(fd.th*100)} %`,"e2")}
+      if(fd.st=="TH"&&fd.th<.7){fd.st="TRIP";rtn(tg(k,fN(t,sd))+"-TH");const secs=zone(t,sd?k:k-1);buildLive();
+        if(secs.some(s=>secLive(t,s))&&fd.d&&S.live.has("b"+k))closeF(k,t,sd,"49 cooled, live-line check");else restoreZone(t,secs,true,1)}}))});
+  const srcKm=S.tp.map((p,k)=>S.live.has("b"+k)?GAP[k]:null).filter(v=>v!=null);
+  S.trains.forEach(tr=>{const id="=L1-T"+p2(tr.id);
+    if(tr.on&&srcKm.length){const w=srcKm.filter(x=>x<=tr.pos),e=srcKm.filter(x=>x>=tr.pos);const dw=w.length?tr.pos-Math.max(...w):null,de=e.length?Math.min(...e)-tr.pos:null;
+      const L=dw!=null&&de!=null?(dw*de)/Math.max(dw+de,.01):(dw!=null?dw:de);tr.U=Math.abs(tr.I)*C.RRAIL*L;
+      if(tr.U>120){const j=STN.reduce((b,s,i)=>Math.abs(s[0]-tr.pos)<Math.abs(STN[b][0]-tr.pos)?i:b,0);
+        if(!S.vld[j]){alarm("=L1-VLD"+(j+1),3,`VLD operated at ${STN[j][1]}, rail potential ${Math.round(tr.U)} V`);ev(`VLD ${STN[j][1]} closed · rail potential ${Math.round(tr.U)} V > 120 V`,"e3")}S.vld[j]=S.t+30}}else tr.U=0;
+    if(tr.on&&tr.V<C.UMIN1)alarm(id+"-UV",2,`T${p2(tr.id)} line voltage ${Math.round(tr.V)} V below Umin1`);else if(!tr.on||tr.V>520)rtn(id+"-UV");
+    if(!tr.on&&tr.mode=="run"&&tr.v<.1)alarm(id+"-STR",2,`T${p2(tr.id)} stranded on dead ${TRK[tr.t]} S${tr.s+1}`);else if(tr.on)rtn(id+"-STR")});
+  S.vld.forEach((v,j)=>{if(v&&S.t>v){S.vld[j]=0;rtn("=L1-VLD"+(j+1));ev(`VLD ${STN[j][1]} reset`)}});
+  if(S.t-S.lastH>=1){S.lastH=S.t;S.hist.push(S.tp.map(p=>p.V));if(S.hist.length>300)S.hist.shift()}}
+/*ENDCORE*/
+
+/* ===================== UI ===================== */
+const $=id=>document.getElementById(id),NS="http://www.w3.org/2000/svg";
+const el=(p,t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);p.appendChild(e);return e};
+const tx=(p,x,y,s,cls="",anc="middle",id)=>{const e=el(p,"text",{x,y,"text-anchor":anc,class:cls});if(id)e.id=id;e.textContent=s;return e};
+const setC=(e,c)=>{if(e&&e.getAttribute("class")!==c)e.setAttribute("class",c)};
+let mt;const say=s=>{$("msg").textContent=s;clearTimeout(mt);mt=setTimeout(()=>$("msg").textContent="",6000)};
+const X=km=>90+km*70, CR=[112,268], RR=[92,288], TY=[102,278];
+S.selTp=2;S.selSec={t:0,s:1};S.sbo=null;S.showRet=true;
+cfgTies=()=>$("cTie").checked;
+
+/* ---- mimic static ---- */
+const mim=$("mim");
+STN.forEach(([x,n],j)=>{const c=X(x);el(mim,"rect",{x:c-32,y:64,width:64,height:8,class:"plat"});el(mim,"rect",{x:c-32,y:308,width:64,height:8,class:"plat"});
+  tx(mim,c,52,n,"stn");el(mim,"path",{id:"vld"+j,d:`M${c+38} 68 l6 -6 l6 6 l-6 6z`,class:"vld"})});
+for(let s=0;s<4;s++)for(let t=0;t<2;t++)el(mim,"rect",{id:`band${t}${s}`,x:X(SEC[s][0]),y:RR[t]-(t?18:10),width:X(SEC[s][1])-X(SEC[s][0]),height:28,class:"band",visibility:"hidden"});
+for(let t=0;t<2;t++)el(mim,"path",{d:`M${X(0)} ${RR[t]} H${X(20)}`,class:"rr"});
+el(mim,"path",{d:`M${X(19.3)} ${TY[0]} L${X(19.0)} ${TY[1]} M${X(19.0)} ${TY[0]} L${X(19.3)} ${TY[1]}`,class:"xo"});
+el(mim,"path",{d:`M${X(0.7)} ${TY[1]} L${X(1.0)} ${TY[0]} M${X(0.7)} ${TY[0]} L${X(1.0)} ${TY[1]}`,class:"xo"});
+for(let t=0;t<2;t++)for(let s=0;s<4;s++){const a=X(SEC[s][0])+(s?5:0),b=X(SEC[s][1])-(s<3?5:0);el(mim,"path",{id:`cr${t}${s}`,d:`M${a} ${CR[t]} H${b}`,class:"cr live"})}
+tx(mim,8,CR[0]+4,"UP ▸","b","start");tx(mim,8,CR[1]+4,"◂ DN","b","start");
+const fx=(k,sd)=>X(GAP[k])+(sd?14:-14);
+S.tp.forEach((p,k)=>{const gx=X(GAP[k]);
+  el(mim,"path",{d:`M${gx} 160 V${RR[0]}`,class:"ret"});el(mim,"path",{d:`M${gx} 216 V${RR[1]}`,class:"ret"});
+  if(k>0&&k<4)for(let t=0;t<2;t++){el(mim,"path",{id:`bp${k}${t}`,d:`M${gx-24} ${CR[t]} Q${gx} ${t?CR[t]+16:CR[t]-16} ${gx+24} ${CR[t]}`,class:"fl dead"});
+    el(mim,"circle",{id:`bc${k}${t}`,cx:gx,cy:t?CR[t]+8:CR[t]-8,r:4.5,class:"brk o","data-dev":`B:${k}:${t}`})}
+  for(let t=0;t<2;t++)for(let sd=0;sd<2;sd++){if(!p.F[t][sd])continue;const x=fx(k,sd);
+    el(mim,"path",{id:`fl${k}${t}${sd}`,d:t?`M${x} 216 V${CR[1]}`:`M${x} 160 V${CR[0]}`,class:"fl live"});
+    el(mim,"path",{id:`ff${k}${t}${sd}`,d:t?`M${x} 216 V${CR[1]}`:`M${x} 160 V${CR[0]}`,class:"flow",visibility:"hidden"});
+    el(mim,"rect",{id:`fs${k}${t}${sd}`,x:x-5,y:(t?234:142)-5,width:10,height:10,class:"brk c","data-dev":`F:${k}:${t}:${sd}`});
+    el(mim,"circle",{id:`fd${k}${t}${sd}`,cx:x,cy:t?255:125,r:3.5,class:"brk c","data-dev":`D:${k}:${t}:${sd}`})}
+  const g=el(mim,"g",{class:"tpbox",id:"tp"+k,tabindex:0,role:"button","aria-label":TPn(k)});
+  el(g,"rect",{x:gx-45,y:160,width:90,height:56,rx:4,class:"box"});tx(g,gx,178,TPn(k),"b");tx(g,gx,194,"","s","middle","tv"+k);tx(g,gx,209,"","s","middle","ti"+k)});
+TIE.forEach((km,s)=>{const x=X(km);el(mim,"path",{id:`tl${s}`,d:`M${x} ${CR[0]} V${CR[1]}`,class:"fl live"});
+  el(mim,"path",{id:`tf${s}`,d:`M${x} ${CR[0]} V${CR[1]}`,class:"flow",visibility:"hidden"});
+  el(mim,"rect",{id:`ts${s}`,x:x-6,y:184,width:12,height:12,class:"brk c","data-dev":`T:${s}`});tx(mim,x+12,194,`TPP-0${s+1}`,"s","start");
+  tx(mim,X((SEC[s][0]+SEC[s][1])/2)+(s==0?40:0),150,"S"+(s+1),"b")});
+const flowG=el(mim,"g",{});const pools={};
+for(let t=0;t<2;t++)for(let s=0;s<4;s++)el(mim,"path",{d:`M${X(SEC[s][0])+6} ${CR[t]} H${X(SEC[s][1])-6}`,class:"hit","data-sec":`${t}${s}`,tabindex:0,role:"button","aria-label":`${TRK[t]} section S${s+1}`});
+for(let km=0;km<=20;km+=2.5){el(mim,"path",{d:`M${X(km)} 340 V348`,stroke:"var(--muted)"});tx(mim,X(km),366,km+" km","s")}
+el(mim,"path",{d:`M${X(0)} 344 H${X(20)}`,stroke:"var(--rule)"});
+const fm=el(mim,"path",{d:"M-5 -24 L4 -14 L-2 -12 L6 0 L-7 -14 L-1 -16 Z",fill:"var(--p1)",visibility:"hidden"});
+const trG=el(mim,"g",{});
+function buildTrains(){trG.innerHTML="";S.trains.forEach(tr=>{const g=el(trG,"g",{class:"trn"});el(g,"rect",{x:-19,y:-7,width:38,height:14,rx:3});
+  tx(g,-2,4,"T"+p2(tr.id));tr.arrow=el(g,"path",{d:"M14 -4 L18 0 L14 4 Z"});el(g,"title",{});tr.g=g})}
+
+/* ---- mimic interaction ---- */
+mim.addEventListener("click",e=>{const d=e.target.closest("[data-dev]");if(d)return selectDev(d.dataset.dev);
+  const h=e.target.closest("[data-sec]");if(h){S.selSec={t:+h.dataset.sec[0],s:+h.dataset.sec[1]};return slow()}
+  const b=e.target.closest(".tpbox");if(b)selectTp(+b.id.slice(2))});
+const keyAct=e=>{if(e.key=="Enter"||e.key==" "){e.preventDefault();e.target.dispatchEvent(new MouseEvent("click",{bubbles:true}))}};
+mim.addEventListener("keydown",keyAct);
+
+/* ---- detail SLD ---- */
+const dsl=$("dsl");const FXD=[[0,0,390,"UP W"],[0,1,460,"UP E"],[1,0,530,"DN W"],[1,1,600,"DN E"]];
+function buildDetail(){const k=S.selTp,p=S.tp[k];dsl.innerHTML="";
+  el(dsl,"path",{id:"dmv",d:`M50 34 H${p.inv?680:330}`,class:"fl"});tx(dsl,50,22,"33 kV ring main","b","start");
+  [120,250].forEach((x,i)=>{el(dsl,"path",{id:"da"+i,d:`M${x} 34 V52`,class:"fl"});
+    el(dsl,"rect",{id:"dQ"+i,x:x-11,y:52,width:22,height:22,class:"brk","data-dev":`Q:${k}:${i}`});tx(dsl,x+16,68,"Q"+(i+1)+" 52","b","start");
+    el(dsl,"path",{id:"db"+i,d:`M${x} 74 V88`,class:"fl"});el(dsl,"circle",{id:"dt"+i,cx:x,cy:99,r:11,class:"fl"});el(dsl,"circle",{id:"du"+i,cx:x,cy:113,r:11,class:"fl"});
+    tx(dsl,x-16,110,"T"+(i+1),"","end");el(dsl,"path",{id:"dc"+i,d:`M${x} 124 V136`,class:"fl"});
+    el(dsl,"rect",{id:"dr"+i,x:x-24,y:136,width:48,height:28,rx:2,class:"fl"});tx(dsl,x,154,"~ / =","s");tx(dsl,x-30,154,"R"+(i+1),"","end");
+    el(dsl,"path",{id:"dd"+i,d:`M${x} 164 V178`,class:"fl"});
+    el(dsl,"rect",{id:"dR"+i,x:x-11,y:178,width:22,height:22,class:"brk","data-dev":`R:${k}:${i}`});tx(dsl,x+16,194,"QR"+(i+1)+" 72","b","start");
+    el(dsl,"path",{id:"de"+i,d:`M${x} 200 V226`,class:"fl"});
+    el(dsl,"path",{d:`M${x+24} 156 H${x+44} V380`,class:"ret"})});
+  el(dsl,"path",{d:"M100 380 H330",class:"ret"});tx(dsl,100,398,"Negative bus → return cables → running rails","s","start");
+  if(p.inv){el(dsl,"path",{id:"dia",d:"M655 34 V136",class:"fl"});el(dsl,"rect",{id:"dib",x:630,y:136,width:50,height:28,rx:2,class:"fl"});tx(dsl,655,154,"INV","s");
+    el(dsl,"path",{id:"dic",d:"M655 164 V226",class:"fl"});tx(dsl,625,154,"inverter","s","end")}
+  el(dsl,"path",{id:"dbus",d:"M50 226 H690",class:"fl"});tx(dsl,50,218,"+750 V DC bus","b","start");
+  FXD.forEach(([t,sd,x,l])=>{const fd=p.F[t][sd];if(!fd){tx(dsl,x,300,"—");tx(dsl,x,360,l,"s");return}
+    el(dsl,"path",{id:`df${t}${sd}`,d:`M${x} 226 V246 M${x} 268 V284 M${x} 304 V330`,class:"fl"});
+    el(dsl,"rect",{id:`dF${t}${sd}`,x:x-11,y:246,width:22,height:22,class:"brk","data-dev":`F:${k}:${t}:${sd}`});tx(dsl,x+14,261,fN(t,sd),"b","start");
+    el(dsl,"circle",{id:`dD${t}${sd}`,cx:x,cy:294,r:8,class:"brk","data-dev":`D:${k}:${t}:${sd}`});tx(dsl,x+12,298,qN(t,sd),"s","start");
+    tx(dsl,x,345,"","s","middle",`dfi${t}${sd}`);tx(dsl,x,360,l+" → S"+(sd?k+1:k),"s")});
+  if(k>0&&k<4)[0,1].forEach(t=>{const x0=t?530:390,y=392;el(dsl,"path",{id:"dbp"+t,d:`M${x0-20} ${y} H${x0+20} M${x0+40} ${y} H${x0+80}`,class:"fl"});
+    el(dsl,"circle",{id:"dB"+t,cx:x0+30,cy:y,r:8,class:"brk","data-dev":`B:${k}:${t}`});tx(dsl,x0+30,412,`QB${t+1} ${TRK[t]} bypass`,"s")});
+  document.querySelectorAll("#tabs button").forEach((b,i)=>b.setAttribute("aria-pressed",i==k));updButtons()}
+dsl.addEventListener("click",e=>{const d=e.target.closest("[data-dev]");if(d)selectDev(d.dataset.dev)});
+$("tabs").innerHTML=S.tp.map((p,k)=>`<button data-k="${k}">${TPn(k)} ${TPN[k]}</button>`).join("");
+$("tabs").onclick=e=>{const b=e.target.closest("button");if(b)selectTp(+b.dataset.k)};
+function selectTp(k){S.selTp=k;buildDetail();slow()}
+
+/* ---- select-before-operate ---- */
+const parse=s=>{const a=s.split(":");return{ty:a[0],a:+a[1],b:+a[2],c:+a[3]}};
+function devName(d){const{ty,a,b,c}=d;return ty=="F"?tg(a,fN(b,c)):ty=="D"?tg(a,qN(b,c)):ty=="Q"?tg(a,"Q"+(b+1)):ty=="R"?tg(a,"QR"+(b+1)):ty=="B"?tg(a,"QB"+(b+1)):`=TPP0${a+1}-QT`}
+function devClosed(d){const{ty,a,b,c}=d;return ty=="F"?F(a,b,c).c:ty=="D"?F(a,b,c).d:ty=="Q"?S.tp[a].q[b]:ty=="R"?S.tp[a].inc[b]:ty=="B"?S.B[b][a]:S.T[a].c}
+function selectDev(s){const d=parse(s);if(d.ty!="T"){const r=occOK(d.a);if(r){ev(`${devName(d)} SELECT rejected: ${r}`,"e2");return say(r)}}
+  const act=devClosed(d)?"OPEN":"CLOSE";S.sbo={d,act,exp:performance.now()+10000};ev(`${devName(d)} C_SC_NA_1 SELECT ${act} · ACTCON`);renderSbo()}
+function renderSbo(){const b=$("sbo");if(!S.sbo){b.className="sbo";b.textContent="Select-before-operate: click any breaker (■), disconnector (●) or tie on the mimic or the substation diagram.";return}
+  const left=Math.max(0,Math.ceil((S.sbo.exp-performance.now())/1000));b.className="sbo armed";
+  b.innerHTML=`<span>Selected <b>${devName(S.sbo.d)}</b> · ${S.sbo.act} · execute within <span id="sbt">${left}</span> s</span><button id="sbx">Execute</button><button id="sbc">Cancel</button>`;
+  $("sbx").onclick=execSbo;$("sbc").onclick=()=>{ev(`${devName(S.sbo.d)} C_SC_NA_1 DEACT`);S.sbo=null;renderSbo()}}
+function execSbo(){const{d,act}=S.sbo,c=act=="CLOSE";S.sbo=null;buildLive();
+  let r=d.ty!="T"?occOK(d.a):"";if(!r)r=d.ty=="F"?cmdF(d.a,d.b,d.c,c):d.ty=="D"?cmdD(d.a,d.b,d.c,c):d.ty=="Q"?cmdQ(d.a,d.b,c):d.ty=="R"?cmdR(d.a,d.b,c):d.ty=="B"?cmdB(d.a,d.b,c):cmdT(d.a,c);
+  if(r){say(r);ev(`${devName(d)} EXECUTE rejected · ${r}`,"e2")}else ev(`${devName(d)} C_SC_NA_1 EXECUTE ${act} · ACTTERM`);renderSbo();slow()}
+
+/* ---- TPSS buttons ---- */
+function seq(list){let d=0;list.forEach(f=>at(d+=.7,f))}
+$("bEn").onclick=()=>{const k=S.selTp,r=occOK(k);if(r)return say(r);const p=S.tp[k];if(!p.mv)return say("No 33 kV supply at "+TPn(k));ev(`${TPn(k)} energisation sequence started`);
+  seq([()=>cmdQ(k,0,1),()=>cmdQ(k,1,1),()=>cmdR(k,0,1),()=>cmdR(k,1,1),...[0,1].flatMap(t=>[0,1].map(sd=>()=>{const f=F(k,t,sd);if(f&&!f.c&&f.d&&f.st!="LO"){const e=cmdF(k,t,sd,1);if(e)ev(`${tg(k,fN(t,sd))} close skipped: ${e}`,"e3")}}))])};
+$("bOos").onclick=()=>{const k=S.selTp,r=occOK(k);if(r)return say(r);ev(`${TPn(k)} rectifiers taken out of service, feeders stay closed as bus-tie`);seq([()=>cmdR(k,0,0),()=>cmdR(k,1,0),()=>cmdQ(k,0,0),()=>cmdQ(k,1,0)])};
+$("bMv").onclick=()=>{const k=S.selTp,p=S.tp[k];
+  if(p.mv){p.mv=0;alarm(tg(k,"MV")+"-LOSS",1,"33 kV supply lost");ev(`${tg(k,"MV")} 33 kV supply lost`,"e1");
+    at(.2,()=>[0,1].forEach(i=>{if(p.inc[i]){p.inc[i]=0;alarm(tg(k,"QR"+(i+1))+"-TRIP",2,`QR${i+1} 27 undervoltage trip`);ev(`${tg(k,"QR"+(i+1))} 72 OPEN · 27 rectifier undervoltage`,"e2")}}))}
+  else{p.mv=1;rtn(tg(k,"MV")+"-LOSS");ev(`${tg(k,"MV")} 33 kV supply restored. Energise the TPSS to bring rectifiers back.`,"eok")}updButtons();slow()};
+$("bCm").onclick=()=>{const k=S.selTp,p=S.tp[k];
+  if(p.comms){p.comms=0;p.snap=JSON.parse(JSON.stringify({V:p.V,I:p.I,q:p.q,inc:p.inc,F:p.F,B:[S.B[0][k],S.B[1][k]]}));alarm(tg(k,"RTU")+"-COM",2,"IEC 104 link down, data not topical");ev(`${tg(k,"RTU")} IEC 104 link A/B lost · values frozen, quality NT`,"e2")}
+  else{p.comms=1;p.snap=null;rtn(tg(k,"RTU")+"-COM");ev(`${tg(k,"RTU")} link restored · C_IC_NA_1 general interrogation, 312 points updated`,"eok")}updButtons();slow()};
+$("bLR").onclick=()=>{const p=S.tp[S.selTp];p.lr=p.lr=="R"?"L":"R";ev(`${tg(S.selTp,"LR")} control mode ${p.lr=="L"?"LOCAL, OCC commands blocked":"REMOTE"}`,p.lr=="L"?"e3":"");
+  if(p.lr=="L")alarm(tg(S.selTp,"LR"),3,"TPSS in LOCAL control");else rtn(tg(S.selTp,"LR"));updButtons();slow()};
+function updButtons(){const p=S.tp[S.selTp];$("bMv").textContent=p.mv?"33 kV supply loss":"Restore 33 kV supply";$("bCm").textContent=p.comms?"Fail IEC 104 link":"Restore IEC 104 link";$("bLR").textContent=p.lr=="R"?"Switch to LOCAL":"Switch to REMOTE"}
+
+/* ---- section operations ---- */
+$("bF").onclick=()=>{if(S.fault)return say("A fault is already on the line. Clear it first.");const{t,s}=S.selSec;
+  S.fault={t,s,pos:SEC[s][0]+.6+Math.random()*(SEC[s][1]-SEC[s][0]-1.2),type:$("fT").value};
+  ev(`${S.fault.type=="transient"?"Flashover":"Persistent short circuit"} on ${TRK[t]} S${s+1} at km ${S.fault.pos.toFixed(2)}`,"e1");
+  buildLive();if(secLive(t,s))protect();else say("Section is dead. The fault will be found by the next line test.");slow()};
+$("bFc").onclick=()=>{if(!S.fault&&!S.tp.some(p=>p.F.flat().some(f=>f&&f.st=="LO")))return say("No fault or lockout on the line.");S.fault=null;ev("Line patrolled, fault removed","eok");
+  S.tp.forEach((p,k)=>p.F.forEach((row,t)=>row.forEach((fd,sd)=>{if(fd&&fd.st=="LO"){fd.st="N";rtn(tg(k,fN(t,sd))+"-LO");ev(`${tg(k,fN(t,sd))} 86 lockout reset`)}})));say("Fault cleared. Use 4 · Restore to re-energise.")};
+$("bEts").onclick=()=>{const{t,s}=S.selSec;if(S.eso[t][s])return say("ETS already operated here.");S.eso[t][s]=1;alarm(`=L1-${TRK[t]}S${s+1}-ETS`,1,`ETS operated on ${TRK[t]} S${s+1}`);ev(`ETS operated · ${TRK[t]} S${s+1}`,"e1");
+  if(S.T[s].c){S.T[s].c=0;S.T[s].st="TRIP";ev(`=TPP0${s+1}-QT 72 OPEN · ETS`,"e1",8)}
+  zoneFeeders(t,zone(t,s)).forEach(([k,tt,sd])=>{const f=F(k,tt,sd);if(f.c)ev(`${tg(k,fN(tt,sd))} 72 OPEN · ETS, 79 blocked`,"e1",14);f.c=0;if(f.st!="LO")f.st="BLK";f.seq++});slow()};
+$("bEtsR").onclick=()=>{const{t,s}=S.selSec;if(!S.eso[t][s])return say("No ETS active on this section.");S.eso[t][s]=0;rtn(`=L1-${TRK[t]}S${s+1}-ETS`);ev(`ETS reset · ${TRK[t]} S${s+1}`);
+  zoneFeeders(t,zone(t,s)).forEach(([k,tt,sd])=>{const f=F(k,tt,sd);if(f.st=="BLK")f.st="N"});say("ETS reset. Use 4 · Restore to re-energise.")};
+const viaOcc=(k,f)=>{const r=occOK(k);if(r){ev(`${TPn(k)} command rejected: ${r}`,"e2");return r}return f()};
+const ends=(t,s)=>[[s,t,1],[s+1,t,0]];
+$("bIso").onclick=()=>{const{t,s}=S.selSec;const steps=[];
+  [s,s+1].forEach(k=>{if(k>0&&k<4&&S.B[t][k])steps.push(()=>{const r=viaOcc(k,()=>cmdB(k,t,0));if(r)ev(`${tg(k,"QB"+(t+1))} ${r}`,"e2")})});
+  if(S.T[s].c)steps.push(()=>cmdT(s,0));
+  ends(t,s).forEach(([k,tt,sd])=>{steps.push(()=>{const f=F(k,tt,sd);if(f.c)viaOcc(k,()=>cmdF(k,tt,sd,0))})});
+  ends(t,s).forEach(([k,tt,sd])=>steps.push(()=>{if(F(k,tt,sd).d)viaOcc(k,()=>cmdD(k,tt,sd,0))}));
+  steps.push(()=>{buildLive();ev(secLive(t,s)?`${TRK[t]} S${s+1} isolation INCOMPLETE, section still live`:`${TRK[t]} S${s+1} isolated · ready for earthing`,secLive(t,s)?"e1":"eok")});
+  ev(`Isolation sequence started · ${TRK[t]} S${s+1}`);seq(steps)};
+$("bEa").onclick=()=>{const{t,s}=S.selSec;buildLive();if(S.earth[t][s])return say("Already earthed.");
+  if(secLive(t,s))return say("Interlock: section is live. Run 1 · Isolate first.");
+  if(ends(t,s).some(([k,tt,sd])=>F(k,tt,sd).d))return say("Interlock: feeder disconnectors QS must be open (visible isolation).");
+  if(S.T[s].c||(s>0&&S.B[t][s])||(s<3&&S.B[t][s+1]))return say("Interlock: tie and bypass disconnectors must be open.");
+  S.earth[t][s]=1;alarm(`=L1-${TRK[t]}S${s+1}-ES`,3,`${TRK[t]} S${s+1} earthed, permit-to-work`);ev(`${TRK[t]} S${s+1} 57 earthing switches CLOSED · permit issued`,"e3");slow()};
+$("bEr").onclick=()=>{const{t,s}=S.selSec;if(!S.earth[t][s])return say("Section is not earthed.");S.earth[t][s]=0;rtn(`=L1-${TRK[t]}S${s+1}-ES`);ev(`${TRK[t]} S${s+1} 57 earthing switches OPEN · permit cancelled`);slow()};
+$("bRs").onclick=()=>{const{t,s}=S.selSec;if(S.earth[t][s])return say("Interlock: remove the earth first.");if(S.eso[t][s])return say("Interlock: reset the ETS first.");
+  const steps=[];ends(t,s).forEach(([k,tt,sd])=>steps.push(()=>{const f=F(k,tt,sd);if(!f.d)viaOcc(k,()=>cmdD(k,tt,sd,1));if(f.st=="BLK"||f.st=="TRIP")f.st="N"}));
+  steps.push(()=>restoreZone(t,zone(t,s),false,1));ev(`Restoration started · ${TRK[t]} S${s+1}`);seq(steps)};
+
+/* ---- configuration ---- */
+$("nT").onchange=e=>{seedTrains(+e.target.value);buildTrains();ev(`Timetable changed: ${e.target.value} trains in service`)};
+$("cIm").onchange=e=>{S.cfg.imax=+e.target.value;ev(`Feeder 76 Imax setting changed to ${S.cfg.imax/1000} kA (all TPSS)`)};
+$("cTie").onchange=e=>{const on=e.target.checked;ev(`Track paralleling ties ${on?"put in service":"taken out of service"}`);
+  seq([0,1,2,3].map(s=>()=>{const r=cmdT(s,on);if(r&&r!="Already closed"&&r!="Already open")ev(`=TPP0${s+1}-QT ${r}`,"e3")}))};
+$("cInv").onchange=e=>{const m=e.target.value;S.tp.forEach((p,k)=>p.inv=m=="all"||(m=="one"&&k==2));S.E={trac:0,reg:0,rheo:0};ev(`Reversible inverters: ${m=="none"?"none":m=="one"?"TPSS-03 only":"all TPSS"} · energy counters reset`);buildDetail()};
+$("cRet").onchange=e=>{S.showRet=e.target.checked};
+$("spd").onclick=e=>{const b=e.target.closest("button");if(!b)return;S.speed=+b.dataset.s;$("spd").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===b))};
+$("bAck").onclick=()=>[...S.alarms].forEach(a=>{if(!a.ack)ack(a)});
+$("al").onclick=e=>{const b=e.target.closest("[data-a]");if(b){const a=S.alarms[+b.dataset.a];if(a)ack(a)}};
+
+/* ---- fast render: trains + current flow ---- */
+const offs=new WeakMap();
+function anim(e,I,dt,scale=60){let o=offs.get(e)||0;o-=Math.sign(I)*Math.min(90,6+Math.abs(I)/scale)*dt;offs.set(e,o);e.setAttribute("stroke-dashoffset",o.toFixed(1))}
+function pool(key,n,cls){const p=pools[key]||(pools[key]=[]);while(p.length<n)p.push(el(flowG,"path",{class:cls}));p.forEach((e,i)=>e.setAttribute("visibility",i<n?"visible":"hidden"));return p}
+function fast(dt){
+  for(let t=0;t<2;t++)for(let s=0;s<4;s++){const ch=S.chains[t][s];const segs=ch?ch.slice(0,-1).filter((c,i)=>Math.abs(c.I)>30&&ch[i+1].x-c.x>.01):[];
+    const pp=pool("p"+t+s,segs.length,"flow"),pr=pool("r"+t+s,S.showRet?segs.length:0,"rflow");
+    segs.forEach((c,i)=>{const nx=ch[ch.indexOf(c)+1];const x1=X(c.x)+(c.x==SEC[s][0]&&s?5:0),x2=X(nx.x)-(nx.x==SEC[s][1]&&s<3?5:0);
+      pp[i].setAttribute("d",`M${x1} ${CR[t]} H${x2}`);anim(pp[i],c.I,dt);
+      if(S.showRet){pr[i].setAttribute("d",`M${x1} ${RR[t]} H${x2}`);anim(pr[i],-c.I,dt)}})}
+  S.tp.forEach((p,k)=>p.F.forEach((row,t)=>row.forEach((fd,sd)=>{if(!fd)return;const e=$(`ff${k}${t}${sd}`);const on=fd.c&&Math.abs(fd.I)>30;e.setAttribute("visibility",on?"visible":"hidden");
+    if(on){setC(e,"flow"+(fd.I<0?" rev":""));anim(e,fd.I,dt)}})));
+  S.T.forEach((T,s)=>{const e=$("tf"+s);const on=T.c&&Math.abs(T.I)>30;e.setAttribute("visibility",on?"visible":"hidden");if(on)anim(e,T.I,dt,40)});
+  S.trains.forEach(tr=>{if(!tr.g)return;let y=TY[tr.t];
+    if(tr.xz=="E"){const f=clamp((XO.E[1]-tr.pos)/(XO.E[1]-XO.E[0]),0,1);y=TY[0]+f*(TY[1]-TY[0])}
+    if(tr.xz=="W"){const f=clamp((tr.pos-XO.W[0])/(XO.W[1]-XO.W[0]),0,1);y=TY[1]+f*(TY[0]-TY[1])}
+    tr.g.setAttribute("transform",`translate(${X(tr.pos).toFixed(1)},${y.toFixed(1)})`);tr.arrow.setAttribute("transform",tr.dir<0?"scale(-1,1) translate(4,0)":"");
+    setC(tr.g,"trn"+(!tr.on||(tr.on&&tr.V<C.UMIN1)?" bad":tr.Pm>1e5?" mot":tr.Pr*tr.rk<-1e5?" reg":""))});
+  if(S.fault){fm.setAttribute("visibility","visible");fm.setAttribute("transform",`translate(${X(S.fault.pos)},${CR[S.fault.t]}) ${S.fault.t?"scale(1,-1)":""}`)}else fm.setAttribute("visibility","hidden")}
+
+/* ---- slow render: states, tables ---- */
+const brkCls=(fd,stale)=>"brk "+(fd.c?"c":"o")+(fd.st=="TRIP"||fd.st=="LO"||fd.st=="BLK"?" alm":fd.st=="LT"||fd.st=="TH"?" amb":"")+(fd.st=="LO"?" blink":"")+(stale?" stale":"");
+const stTxt={N:"",TRIP:"tripped",LT:"line test",LO:"86 lockout",BLK:"blocked",TH:"49 cooling"};
+let lastAv=-1,lastEv=-1,lastTrend=0;
+function slow(){
+  $("clk").textContent=fmt(S.t).slice(0,8);
+  for(let t=0;t<2;t++)for(let s=0;s<4;s++){setC($(`cr${t}${s}`),"cr "+(S.earth[t][s]?"earth":S.eso[t][s]?"eso":secLive(t,s)?"live":"dead"));
+    $(`band${t}${s}`).setAttribute("visibility",S.selSec.t==t&&S.selSec.s==s?"visible":"hidden")}
+  S.tp.forEach((p,k)=>{const v=p.snap||p,stale=!p.comms,bl=S.live.has("b"+k);
+    p.F.forEach((row,t)=>row.forEach((fd,sd)=>{if(!fd)return;const vf=v.F[t][sd];setC($(`fl${k}${t}${sd}`),"fl "+(fd.c&&fd.d&&bl?"live":"dead"));
+      setC($(`fs${k}${t}${sd}`),brkCls(vf,stale));setC($(`fd${k}${t}${sd}`),"brk "+(vf.d?"c":"o")+(stale?" stale":""))}));
+    if(k>0&&k<4)[0,1].forEach(t=>{setC($(`bp${k}${t}`),"fl "+(S.B[t][k]&&secLive(t,k)?"live":"dead"));setC($(`bc${k}${t}`),"brk "+((p.snap?p.snap.B[t]:S.B[t][k])?"c":"o"))});
+    $("tv"+k).textContent=stale?`${Math.round(v.V)} V ?`:bl?`${Math.round(p.V)} V`:"bus dead";
+    $("ti"+k).textContent=(stale?"NT · ":"")+(bl&&!srcN(k)?`bus-tie · ${p.mv?"rect 0/2":"MV lost"}`:`${(v.I/1000).toFixed(2)} kA · ${p.mv?srcN(k)+"/2":"MV lost"}`);
+    setC($("tp"+k),"tpbox"+(k==S.selTp?" sel":"")+(!p.mv||srcN(k)<2?" bad":"")+(stale?" nc":""))});
+  S.T.forEach((T,s)=>{setC($("tl"+s),"fl "+(T.c&&secLive(0,s)?"live":"dead"));setC($("ts"+s),"brk "+(T.c?"c":"o")+(T.st=="TRIP"?" alm":""))});
+  STN.forEach((s,j)=>setC($("vld"+j),"vld"+(S.vld[j]?" on":"")));
+  S.trains.forEach(tr=>{if(tr.g)tr.g.querySelector("title").textContent=`T${p2(tr.id)} · ${TRK[tr.t]} · ${Math.round(tr.v*3.6)} km/h · ${tr.mode=="dwell"?"dwell":tr.Pm>1e5?"motoring":tr.Pr<0?"braking":"coasting"} · ${Math.round(tr.V)} V · ${Math.round(tr.I)} A${tr.why&&tr.mode!="dwell"?" · next stop: "+tr.why:""}`});
+  const{t:st,s:ss}=S.selSec;$("selsec").textContent=`${TRK[st]} · S${ss+1} · km ${SEC[ss][0]}–${SEC[ss][1]} · ${S.earth[st][ss]?"EARTHED":S.eso[st][ss]?"ETS ACTIVE":secLive(st,ss)?"energised":"de-energised"} · fed by ${TPn(ss)} and ${TPn(ss+1)}`;
+  // KPIs
+  const on=S.trains.filter(t=>t.on);$("kP").firstChild.textContent=`${(on.reduce((a,t)=>a+t.Pm,0)/1e6).toFixed(1)} MW`;
+  const mv=on.filter(t=>t.mode!="dwell");$("kV").firstChild.textContent=on.length?`${Math.round(Math.min(...on.map(t=>t.V)))} V`:"—";
+  const reg=S.E.reg+S.E.rheo;$("kR").firstChild.textContent=reg>0?`${Math.round(100*S.E.reg/reg)} %`:"—";$("kT").firstChild.textContent=`${S.trains.length}`;
+  // detail
+  const k=S.selTp,p=S.tp[k],v=p.snap||p,bl=S.live.has("b"+k),stale=!p.comms;
+  $("dV").firstChild.textContent=(bl||stale?`${Math.round(v.V)} V`:"0 V")+(stale?" ?":"");$("dI").firstChild.textContent=`${(v.I/1000).toFixed(2)} kA`;
+  $("dP").firstChild.textContent=`${(v.V*v.I/1e6).toFixed(2)} MW`+(p.IV>0&&!stale?` · inv ${(p.IV/1000).toFixed(1)} kA`:"");
+  $("dG").firstChild.textContent=`${srcN(k)}/2${p.mv?"":" · MV lost"}${bl&&!srcN(k)?" · bus fed from line":""}`;$("dC").firstChild.textContent=`${p.lr=="R"?"REMOTE":"LOCAL"} · ${p.comms?"OK":"LOST"}`;
+  setC($("dmv"),"fl "+(p.mv?"live":"dead"));
+  [0,1].forEach(i=>{const g=p.mv&&v.q[i];setC($("da"+i),"fl "+(p.mv?"live":"dead"));["db","dt","du","dc","dr","dd"].forEach(x=>setC($(x+i),"fl "+(g?"live":"dead")));
+    setC($("de"+i),"fl "+(g&&v.inc[i]?"live":"dead"));setC($("dQ"+i),"brk "+(v.q[i]?"c":"o")+(stale?" stale":""));setC($("dR"+i),"brk "+(v.inc[i]?"c":"o")+(stale?" stale":""))});
+  if(p.inv){setC($("dia"),"fl "+(p.mv?"live":"dead"));["dib","dic"].forEach(x=>setC($(x),"fl "+(p.mv&&bl?"live":"dead")))}
+  setC($("dbus"),"fl "+(bl?"live":"dead"));
+  FXD.forEach(([t,sd])=>{const fd=p.F[t][sd];if(!fd)return;const vf=v.F[t][sd];setC($(`df${t}${sd}`),"fl "+(bl&&fd.c&&fd.d?"live":"dead"));setC($(`dF${t}${sd}`),brkCls(vf,stale));setC($(`dD${t}${sd}`),"brk "+(vf.d?"c":"o")+(stale?" stale":""));
+    const e=$(`dfi${t}${sd}`);e.textContent=vf.c?`${(vf.I/1000).toFixed(2)} kA`:(stTxt[vf.st]||"open");setC(e,"s "+(vf.st=="N"?"":vf.st=="LT"||vf.st=="TH"?"e2":"e1"))});
+  if(k>0&&k<4)[0,1].forEach(t=>{const c=p.snap?p.snap.B[t]:S.B[t][k];setC($("dB"+t),"brk "+(c?"c":"o"));setC($("dbp"+t),"fl "+(c&&secLive(t,k)?"live":"dead"))});
+  if(S.sbo){const left=Math.ceil((S.sbo.exp-performance.now())/1000);if(left<=0){ev(`${devName(S.sbo.d)} select timeout, 10 s`,"e3");S.sbo=null;renderSbo()}else if($("sbt"))$("sbt").textContent=left}
+  // load-flow table
+  let rows="";for(let t=0;t<2;t++)for(let s=0;s<4;s++){const live=secLive(t,s),fw=F(s,t,1),fe=F(s+1,t,0);
+    const nf=(fw.c&&fw.d?1:0)+(fe.c&&fe.d?1:0),byp=(s>0&&S.B[t][s])||(s<3&&S.B[t][s+1]);
+    const trs=S.trains.filter(r=>r.on&&r.t==t&&r.s==s);
+    const stx=S.earth[t][s]?'<span class="e3">earthed</span>':S.eso[t][s]?'<span class="e1">ETS</span>':live?"live":'<span class="e2">dead</span>';
+    const feed=!live?"—":nf==2?"double-end":nf==1?'<span class="e3">single-end</span>':byp||S.T[s].c?'<span class="e3">via bypass/tie</span>':"—";
+    rows+=`<tr><td>${TRK[t]} S${s+1}</td><td>${stx}</td><td>${feed}</td><td class="n">${fw.c?(fw.I/1000).toFixed(2):"—"}</td><td class="n">${fe.c?(-fe.I/1000).toFixed(2):"—"}</td><td class="n">${trs.length}</td><td class="n">${trs.length?Math.round(Math.min(...trs.map(r=>r.V))):"—"}</td><td class="n">${trs.length?Math.round(Math.max(...trs.map(r=>r.U))):"—"}</td></tr>`}
+  $("lf").innerHTML=rows;
+  // chips & tables
+  const cnt=[1,2,3].map(pr=>({n:S.alarms.filter(a=>a.p==pr&&a.active).length,u:S.alarms.some(a=>a.p==pr&&!a.ack)}));
+  $("chips").innerHTML=cnt.map((c,i)=>`<span class="chip c${i+1}${c.n||c.u?" on":""}${c.u?" blink":""}">P${i+1} · ${c.n}</span>`).join("");
+  if(S.av!=lastAv){lastAv=S.av;const L=S.alarms.map((a,i)=>({a,i})).sort((x,y)=>(x.a.ack-y.a.ack)||(x.a.p-y.a.p)||(y.a.t-x.a.t)).slice(0,60);
+    $("al").innerHTML=L.length?L.map(({a,i})=>`<tr class="${a.ack?"":"un"}"><td><span class="pr pr${a.p}${a.ack?"":" blink"}">${a.p}</span></td><td>${fmt(a.t).slice(0,8)}</td><td>${a.tag}</td><td>${a.text}</td><td>${a.active?(a.ack?"ACK":"UNACK"):"RTN UNACK"}</td><td>${a.ack?"":`<button data-a="${i}">Ack</button>`}</td></tr>`).join(""):`<tr><td colspan="6" style="color:var(--muted)">No active alarms. Line in normal service.</td></tr>`}
+  if(S.evv!=lastEv){lastEv=S.evv;$("soe").innerHTML=S.ev.slice(0,100).map(e=>`<tr><td>${fmt(e.t)}</td><td class="${e.cls}">${e.text}</td></tr>`).join("")}
+  if(performance.now()-lastTrend>1000){lastTrend=performance.now();drawTrend()}}
+
+/* ---- trend ---- */
+const TCOL=["--sel","--flow","--ink","--regen","--earth"];
+$("tlg").innerHTML=TCOL.map((c,k)=>`<span><i style="border-top:2.5px solid var(${c})"></i>${TPn(k)}</span>`).join("");
+function drawTrend(){const cv=$("tr"),r=cv.getBoundingClientRect(),dpr=devicePixelRatio||1;if(!r.width)return;cv.width=r.width*dpr;cv.height=r.height*dpr;
+  const c=cv.getContext("2d");c.scale(dpr,dpr);const W=r.width,H=r.height,L=40,R=10,T=8,B=18,cs=getComputedStyle(document.documentElement),gv=n=>cs.getPropertyValue(n).trim();
+  const y=v=>T+(H-T-B)*(1-(clamp(v,400,950)-400)/550);c.font="11px "+gv("--mono");
+  [[500,"Umin1"],[750,"Un"],[900,"Umax1"]].forEach(([v,l])=>{c.strokeStyle=gv("--rule");c.setLineDash([3,3]);c.lineWidth=1;c.beginPath();c.moveTo(L,y(v));c.lineTo(W-R,y(v));c.stroke();c.setLineDash([]);c.fillStyle=gv("--muted");c.fillText(v,6,y(v)+4);c.fillText(l,W-R-44,y(v)-3)});
+  const h=S.hist,n=300,xs=i=>L+(W-L-R)*(i+n-h.length)/(n-1);
+  for(let k=0;k<5;k++){c.strokeStyle=gv(TCOL[k]);c.lineWidth=k==S.selTp?2.4:1.4;c.beginPath();h.forEach((d,i)=>{const yy=y(d[k]||400);i?c.lineTo(xs(i),yy):c.moveTo(xs(i),yy)});c.stroke()}
+  c.fillStyle=gv("--muted");c.fillText("−5 min",L,H-4);c.fillText("now",W-R-24,H-4)}
+
+/* ---- boot ---- */
+seedTrains(8);buildTrains();buildDetail();renderSbo();
+ev("Line 1 traction power in normal service · double-end feeding, ties closed, TPSS-03 inverter in service","eok");
+for(let i=0;i<300;i++)step(.1);
+let last=performance.now(),lastSlow=0;
+function frame(now){const dt=Math.min(.1,(now-last)/1000);last=now;
+  if(S.speed>0){S.acc+=dt*S.speed;let n=0;while(S.acc>=.1&&n<40){step(.1);S.acc-=.1;n++}if(n>=40)S.acc=0}
+  fast(dt);if(now-lastSlow>250){lastSlow=now;slow()}requestAnimationFrame(frame)}
+slow();requestAnimationFrame(frame);addEventListener("resize",drawTrend);
+</script>
+
+</body></html>
